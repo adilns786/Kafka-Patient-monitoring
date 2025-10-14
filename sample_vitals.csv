@@ -1,0 +1,5 @@
+patient_id,heart_rate,spo2,systolic,diastolic,respiratory_rate,temperature
+P001,78,98,120,78,16,36.8
+P002,92,95,130,85,18,37.2
+P003,110,90,145,95,22,38.0
+P004,60,99,110,70,14,36.5
