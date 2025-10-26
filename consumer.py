@@ -4,27 +4,66 @@ from kafka import KafkaConsumer
 from kafka.errors import KafkaError
 import time
 
+# ---- FIX: Cassandra connection setup for Python 3.12 ----
+from gevent import monkey
+monkey.patch_all()
+
+from cassandra.cluster import Cluster
+# ---------------------------------------------------------
+
+# Connect to Cassandra
+cluster = Cluster(['localhost'])
+session = cluster.connect('hospital')
+
 TOPIC = "patient.vitals"
 BOOTSTRAP = "localhost:9093"
 GROUP_ID = "vitals-monitor-consumer-v7"  # Fresh consumer group
 
+def save_to_cassandra(data):
+    """Save patient vitals data to Cassandra database"""
+    session.execute(
+        """
+        INSERT INTO patient_vitals (patient_id, timestamp, heart_rate, spo2, systolic, diastolic, respiratory_rate, temperature)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            data['patient_id'],
+            data['timestamp'],
+            data['heart_rate'],
+            data['spo2'],
+            data['blood_pressure']['systolic'],
+            data['blood_pressure']['diastolic'],
+            data['respiratory_rate'],
+            data['temperature']
+        )
+    )
+
 def process(msg):
-    # msg is bytes -> decode
+    """Process incoming patient vitals message and check for alerts"""
+    # msg is string -> parse JSON
     data = json.loads(msg)
-    # simple alert rule: high HR or low SpO2
+    
+    # Simple alert rules: high HR or low SpO2
     hr = data.get("heart_rate")
     spo2 = data.get("spo2")
     alerts = []
+    
     if hr and hr > 110:
         alerts.append(f"High heart rate: {hr}")
     if spo2 and spo2 < 92:
         alerts.append(f"Low SpO2: {spo2}")
+    
     ts = data.get("timestamp")
     print(f"[{ts}] {data['patient_id']} -> HR:{hr} SpO2:{spo2} BP:{data['blood_pressure']} RR:{data['respiratory_rate']} T:{data['temperature']}")
+    
     if alerts:
         print("  >>> ALERT:", "; ".join(alerts))
+    
+    # Save to Cassandra
+    save_to_cassandra(data)
 
 if __name__ == "__main__":
+    consumer = None
     try:
         consumer = KafkaConsumer(
             TOPIC,
@@ -33,7 +72,6 @@ if __name__ == "__main__":
             enable_auto_commit=True,
             group_id=GROUP_ID,
             value_deserializer=lambda m: m.decode('utf-8')
-            # Removed consumer_timeout_ms - let it wait indefinitely
         )
         
         print(f"Consumer started, listening to '{TOPIC}'")
@@ -72,5 +110,9 @@ if __name__ == "__main__":
         import traceback
         traceback.print_exc()
     finally:
-        consumer.close()
-        print("Consumer closed")
+        if consumer:
+            consumer.close()
+            print("Consumer closed")
+        if cluster:
+            cluster.shutdown()
+            print("Cassandra connection closed")
